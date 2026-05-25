@@ -15,10 +15,6 @@ CORS(app)
 cache_precos = {}
 
 
-# =========================
-# CRIA DRIVER CHROME HEADLESS
-# Usa Chrome do sistema (Render) ou ChromeDriver local
-# =========================
 def criar_driver():
     opcoes = Options()
     opcoes.add_argument("--headless=new")
@@ -35,7 +31,6 @@ def criar_driver():
     opcoes.add_experimental_option("excludeSwitches", ["enable-automation"])
     opcoes.add_experimental_option("useAutomationExtension", False)
 
-    # Se estiver no Render/Linux, usa o chromium do sistema
     chrome_bin = os.environ.get("CHROME_BIN")
     chromedriver_path = os.environ.get("CHROMEDRIVER_PATH")
 
@@ -45,22 +40,16 @@ def criar_driver():
     if chromedriver_path:
         service = Service(executable_path=chromedriver_path)
     else:
-        # Ambiente local — usa webdriver_manager
         from webdriver_manager.chrome import ChromeDriverManager
         service = Service(ChromeDriverManager().install())
 
     driver = webdriver.Chrome(service=service, options=opcoes)
-
     driver.execute_script(
         "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
     )
-
     return driver
 
 
-# =========================
-# EXTRATOR DE PREÇOS
-# =========================
 def extrair_precos(texto):
     precos = re.findall(r"R\$\s*[\d\.]+,\d{2}", texto)
     if len(precos) >= 3:
@@ -72,21 +61,22 @@ def extrair_precos(texto):
     return None
 
 
-# =========================
-# SCRAPING COM SELENIUM
-# =========================
 def buscar_dados(url):
     driver = None
     try:
-        print(f"URL: {url}")
+        print(f"URL: {url}", flush=True)
         driver = criar_driver()
         driver.get(url)
-
-        time.sleep(3)  # Aguarda JS carregar a página
+        time.sleep(4)
 
         html = driver.page_source
         soup = BeautifulSoup(html, "html.parser")
         texto = soup.get_text(" ")
+
+        # DEBUG: imprime trecho do texto para ver o que chegou
+        print("--- TEXTO PAGINA (primeiros 2000 chars) ---", flush=True)
+        print(texto[:2000], flush=True)
+        print("-------------------------------------------", flush=True)
 
         resultados = {}
         blocos = {
@@ -105,11 +95,11 @@ def buscar_dados(url):
                 except Exception:
                     pass
 
-        print(f"RESULTADO: {resultados}")
+        print(f"RESULTADO FINAL: {resultados}", flush=True)
         return resultados
 
     except Exception as e:
-        print(f"ERRO SELENIUM: {e}")
+        print(f"ERRO SELENIUM: {e}", flush=True)
         return {}
 
     finally:
@@ -117,9 +107,6 @@ def buscar_dados(url):
             driver.quit()
 
 
-# =========================
-# API
-# =========================
 @app.route("/api/preco", methods=["GET"])
 def preco():
     try:
@@ -131,12 +118,11 @@ def preco():
             return jsonify({"erro": "carta ausente"}), 400
 
         cache_key = f"{nome}-{ed}-{num}"
-
         if cache_key in cache_precos:
-            print(f"CACHE HIT: {cache_key}")
+            print(f"CACHE HIT: {cache_key}", flush=True)
             return jsonify(cache_precos[cache_key])
 
-        print(f"BUSCA NOVA: {nome}")
+        print(f"BUSCA NOVA: {nome}", flush=True)
 
         nome_enc = urllib.parse.quote(nome)
         url = (
@@ -149,13 +135,32 @@ def preco():
         return jsonify(dados)
 
     except Exception as e:
-        print(f"ERRO GERAL: {e}")
+        print(f"ERRO GERAL: {e}", flush=True)
         return jsonify({"erro": True, "mensagem": str(e)}), 500
 
 
-# =========================
-# HEALTHCHECK
-# =========================
+# ✅ NOVO: endpoint de debug — mostra o HTML bruto que o Selenium está vendo
+@app.route("/api/debug", methods=["GET"])
+def debug():
+    driver = None
+    try:
+        url = request.args.get("url", "https://www.ligapokemon.com.br/?view=cards/card&card=Kakuna%20%28002%2F086%29&ed=CRI&num=002")
+        driver = criar_driver()
+        driver.get(url)
+        time.sleep(4)
+        texto = BeautifulSoup(driver.page_source, "html.parser").get_text(" ")
+        return jsonify({
+            "url": url,
+            "tamanho": len(texto),
+            "trecho": texto[:3000],  # primeiros 3000 chars para análise
+        })
+    except Exception as e:
+        return jsonify({"erro": str(e)})
+    finally:
+        if driver:
+            driver.quit()
+
+
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "cache": len(cache_precos)}), 200
