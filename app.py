@@ -1,7 +1,6 @@
 import urllib.parse
 import re
 import requests
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from bs4 import BeautifulSoup
@@ -9,20 +8,13 @@ from bs4 import BeautifulSoup
 app = Flask(__name__)
 CORS(app)
 
-# =========================================
-# CACHE
-# =========================================
 cache_precos = {}
 
-# =========================================
-# EXTRAIR PREÇOS
-# =========================================
+# =========================
+# EXTRATOR ROBUSTO
+# =========================
 def extrair_precos(texto):
-
-    precos = re.findall(
-        r"R\$\s*[\d\.]+,\d{2}",
-        texto
-    )
+    precos = re.findall(r"R\$\s*[\d\.]+,\d{2}", texto)
 
     if len(precos) >= 3:
         return {
@@ -33,93 +25,118 @@ def extrair_precos(texto):
 
     return None
 
-# =========================================
-# ROTA
-# =========================================
-@app.route('/api/preco', methods=['GET'])
-def preco():
-    nome_carta = request.args.get('carta')
-    edicao = request.args.get('ed')
-    numero = request.args.get('num')
 
-    if not nome_carta:
-        return jsonify({"erro": "Carta não enviada"}), 400
+# =========================
+# FUNÇÃO SEGURA DE SCRAPING
+# =========================
+def buscar_dados(url):
 
-    cache_key = f"{nome_carta}-{edicao}-{numero}"
-
-    if cache_key in cache_precos:
-        print("CACHE:", nome_carta)
-        return jsonify(cache_precos[cache_key])
-
-    print("BUSCA NOVA:", nome_carta)
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+        )
+    }
 
     try:
-        nome_carta_link = urllib.parse.quote(nome_carta)
+        r = requests.get(url, headers=headers, timeout=15)
+
+        if r.status_code != 200:
+            print("STATUS ERROR:", r.status_code)
+            return {}
+
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        texto = soup.get_text(separator=" ")
+
+        # DEBUG REAL (IMPORTANTE)
+        print("TEXTO PARCIAL:", texto[:1000])
+
+        resultados = {}
+
+        blocos = {
+            "normal": "Normal",
+            "foil": "Foil",
+            "reverse_foil": "Reverse Foil"
+        }
+
+        for key, label in blocos.items():
+
+            if label in texto:
+                try:
+                    trecho = texto.split(label)[1][:1500]
+                    dados = extrair_precos(trecho)
+
+                    if dados:
+                        resultados[key] = dados
+
+                except Exception as e:
+                    print(f"Erro bloco {key}:", e)
+
+        return resultados
+
+    except Exception as e:
+        print("ERRO REQUEST:", e)
+        return {}
+
+
+# =========================
+# API
+# =========================
+@app.route('/api/preco', methods=['GET'])
+def preco():
+
+    try:
+        nome = request.args.get('carta')
+        ed = request.args.get('ed')
+        num = request.args.get('num')
+
+        if not nome:
+            return jsonify({"erro": "carta ausente"}), 400
+
+        cache_key = f"{nome}-{ed}-{num}"
+
+        if cache_key in cache_precos:
+            return jsonify(cache_precos[cache_key])
+
+        print("BUSCA NOVA:", nome)
+
+        nome_enc = urllib.parse.quote(nome)
 
         url = (
             "https://www.ligapokemon.com.br/"
-            f"?view=cards/card"
-            f"&card={nome_carta_link}"
-            f"&ed={edicao}"
-            f"&num={numero}"
+            f"?view=cards/card&card={nome_enc}&ed={ed}&num={num}"
         )
 
         print("URL:", url)
 
-        headers = {
-            "User-Agent": "Mozilla/5.0"
-        }
+        dados = buscar_dados(url)
 
-        response = requests.get(url, headers=headers, timeout=15)
+        # 🔥 GARANTE QUE NUNCA QUEBRA API
+        if not dados:
+            dados = {
+                "erro": False,
+                "mensagem": "sem dados encontrados",
+                "normal": None,
+                "foil": None,
+                "reverse_foil": None
+            }
 
-        if response.status_code != 200:
-            return jsonify({"erro": "Falha ao acessar site"}), 500
+        cache_precos[cache_key] = dados
 
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        texto_pagina = soup.get_text()
-
-        precos_finais = {}
-
-        # NORMAL
-        if "Normal" in texto_pagina:
-            trecho = texto_pagina.split("Normal")[1][:1000]
-            dados = extrair_precos(trecho)
-            if dados:
-                precos_finais["normal"] = dados
-
-        # FOIL
-        if "Foil" in texto_pagina:
-            trecho = texto_pagina.split("Foil")[1][:1000]
-            dados = extrair_precos(trecho)
-            if dados:
-                precos_finais["foil"] = dados
-
-        # REVERSE FOIL
-        if "Reverse Foil" in texto_pagina:
-            trecho = texto_pagina.split("Reverse Foil")[1][:1000]
-            dados = extrair_precos(trecho)
-            if dados:
-                precos_finais["reverse_foil"] = dados
-
-        if not precos_finais:
-            print("NENHUM PREÇO ENCONTRADO")
-
-        cache_precos[cache_key] = precos_finais
-
-        return jsonify(precos_finais)
+        return jsonify(dados)
 
     except Exception as e:
-        print("ERRO:", str(e))
-        return jsonify({"erro": str(e)}), 500
+        print("ERRO GERAL:", str(e))
+
+        return jsonify({
+            "erro": True,
+            "mensagem": str(e)
+        }), 500
 
 
-# =========================================
+# =========================
 # START
-# =========================================
+# =========================
 if __name__ == '__main__':
-    app.run(
-        host='0.0.0.0',
-        port=5000,
-        debug=True
-    )
+    app.run(host='0.0.0.0', port=5000)
