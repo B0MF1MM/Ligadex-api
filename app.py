@@ -5,9 +5,7 @@ import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
+import undetected_chromedriver as uc
 
 app = Flask(__name__)
 CORS(app)
@@ -15,41 +13,29 @@ CORS(app)
 cache_precos = {}
 
 
+# =========================
+# DRIVER COM UNDETECTED-CHROMEDRIVER
+# Patcha o binário do Chrome para passar pelo Cloudflare
+# =========================
 def criar_driver():
-    opcoes = Options()
+    opcoes = uc.ChromeOptions()
     opcoes.add_argument("--headless=new")
     opcoes.add_argument("--no-sandbox")
     opcoes.add_argument("--disable-dev-shm-usage")
     opcoes.add_argument("--disable-gpu")
     opcoes.add_argument("--window-size=1920,1080")
-    opcoes.add_argument("--disable-blink-features=AutomationControlled")
-    opcoes.add_argument(
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    )
-    opcoes.add_experimental_option("excludeSwitches", ["enable-automation"])
-    opcoes.add_experimental_option("useAutomationExtension", False)
 
     chrome_bin = os.environ.get("CHROME_BIN")
-    chromedriver_path = os.environ.get("CHROMEDRIVER_PATH")
-
     if chrome_bin:
         opcoes.binary_location = chrome_bin
 
-    if chromedriver_path:
-        service = Service(executable_path=chromedriver_path)
-    else:
-        from webdriver_manager.chrome import ChromeDriverManager
-        service = Service(ChromeDriverManager().install())
-
-    driver = webdriver.Chrome(service=service, options=opcoes)
-    driver.execute_script(
-        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-    )
+    driver = uc.Chrome(options=opcoes, use_subprocess=False)
     return driver
 
 
+# =========================
+# EXTRATOR DE PREÇOS
+# =========================
 def extrair_precos(texto):
     precos = re.findall(r"R\$\s*[\d\.]+,\d{2}", texto)
     if len(precos) >= 3:
@@ -61,22 +47,25 @@ def extrair_precos(texto):
     return None
 
 
+# =========================
+# SCRAPING
+# =========================
 def buscar_dados(url):
     driver = None
     try:
         print(f"URL: {url}", flush=True)
         driver = criar_driver()
         driver.get(url)
-        time.sleep(4)
+
+        # Aguarda mais tempo para o Cloudflare liberar
+        time.sleep(6)
 
         html = driver.page_source
         soup = BeautifulSoup(html, "html.parser")
         texto = soup.get_text(" ")
 
-        # DEBUG: imprime trecho do texto para ver o que chegou
-        print("--- TEXTO PAGINA (primeiros 2000 chars) ---", flush=True)
-        print(texto[:2000], flush=True)
-        print("-------------------------------------------", flush=True)
+        print(f"TAMANHO PAGINA: {len(texto)}", flush=True)
+        print(f"TRECHO: {texto[:500]}", flush=True)
 
         resultados = {}
         blocos = {
@@ -95,11 +84,11 @@ def buscar_dados(url):
                 except Exception:
                     pass
 
-        print(f"RESULTADO FINAL: {resultados}", flush=True)
+        print(f"RESULTADO: {resultados}", flush=True)
         return resultados
 
     except Exception as e:
-        print(f"ERRO SELENIUM: {e}", flush=True)
+        print(f"ERRO: {e}", flush=True)
         return {}
 
     finally:
@@ -107,6 +96,9 @@ def buscar_dados(url):
             driver.quit()
 
 
+# =========================
+# API
+# =========================
 @app.route("/api/preco", methods=["GET"])
 def preco():
     try:
@@ -139,20 +131,22 @@ def preco():
         return jsonify({"erro": True, "mensagem": str(e)}), 500
 
 
-# ✅ NOVO: endpoint de debug — mostra o HTML bruto que o Selenium está vendo
 @app.route("/api/debug", methods=["GET"])
 def debug():
     driver = None
     try:
-        url = request.args.get("url", "https://www.ligapokemon.com.br/?view=cards/card&card=Kakuna%20%28002%2F086%29&ed=CRI&num=002")
+        url = request.args.get(
+            "url",
+            "https://www.ligapokemon.com.br/?view=cards/card&card=Kakuna%20%28002%2F086%29&ed=CRI&num=002"
+        )
         driver = criar_driver()
         driver.get(url)
-        time.sleep(4)
+        time.sleep(6)
         texto = BeautifulSoup(driver.page_source, "html.parser").get_text(" ")
         return jsonify({
             "url": url,
             "tamanho": len(texto),
-            "trecho": texto[:3000],  # primeiros 3000 chars para análise
+            "trecho": texto[:3000],
         })
     except Exception as e:
         return jsonify({"erro": str(e)})
