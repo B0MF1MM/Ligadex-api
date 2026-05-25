@@ -1,15 +1,10 @@
-import time
 import urllib.parse
 import re
+import requests
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-
-from selenium import webdriver
-from selenium.webdriver.edge.service import Service
-from selenium.webdriver.common.by import By
-
-from webdriver_manager.microsoft import EdgeChromiumDriverManager
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 CORS(app)
@@ -18,29 +13,6 @@ CORS(app)
 # CACHE
 # =========================================
 cache_precos = {}
-
-# =========================================
-# NAVEGADOR
-# =========================================
-def iniciar_navegador():
-
-    options = webdriver.EdgeOptions()
-
-    options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-
-    service = Service(
-        EdgeChromiumDriverManager().install()
-    )
-
-    driver = webdriver.Edge(
-        service=service,
-        options=options
-    )
-
-    return driver
 
 # =========================================
 # EXTRAIR PREÇOS
@@ -53,7 +25,6 @@ def extrair_precos(texto):
     )
 
     if len(precos) >= 3:
-
         return {
             "menor": precos[0],
             "medio": precos[1],
@@ -63,44 +34,26 @@ def extrair_precos(texto):
     return None
 
 # =========================================
-# API
+# ROTA
 # =========================================
 @app.route('/api/preco', methods=['GET'])
 def preco():
-    return buscar_preco()
-
-def buscar_preco():
-
     nome_carta = request.args.get('carta')
     edicao = request.args.get('ed')
     numero = request.args.get('num')
 
-    # =====================================
-    # VALIDAÇÃO
-    # =====================================
     if not nome_carta:
-        return jsonify({
-            "erro": "Carta não enviada"
-        }), 400
+        return jsonify({"erro": "Carta não enviada"}), 400
 
-    # =====================================
-    # CACHE
-    # =====================================
     cache_key = f"{nome_carta}-{edicao}-{numero}"
 
     if cache_key in cache_precos:
-        print(f"CACHE: {nome_carta}")
+        print("CACHE:", nome_carta)
         return jsonify(cache_precos[cache_key])
 
-    print(f"BUSCA NOVA: {nome_carta}")
-
-    navegador = iniciar_navegador()
+    print("BUSCA NOVA:", nome_carta)
 
     try:
-
-        # =================================
-        # URL
-        # =================================
         nome_carta_link = urllib.parse.quote(nome_carta)
 
         url = (
@@ -113,110 +66,58 @@ def buscar_preco():
 
         print("URL:", url)
 
-        # =================================
-        # ABRE PÁGINA
-        # =================================
-        navegador.get(url)
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
 
-        # espera carregar
-        time.sleep(4)
+        response = requests.get(url, headers=headers, timeout=15)
+
+        if response.status_code != 200:
+            return jsonify({"erro": "Falha ao acessar site"}), 500
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        texto_pagina = soup.get_text()
 
         precos_finais = {}
 
-        # =================================
-        # PEGA TEXTO DA PÁGINA
-        # =================================
-        body = navegador.find_element(By.TAG_NAME, "body")
-
-        texto_pagina = body.text
-
-        # DEBUG
-        print(texto_pagina[:3000])
-
-        # =================================
         # NORMAL
-        # =================================
         if "Normal" in texto_pagina:
+            trecho = texto_pagina.split("Normal")[1][:1000]
+            dados = extrair_precos(trecho)
+            if dados:
+                precos_finais["normal"] = dados
 
-            try:
-
-                trecho = texto_pagina.split("Normal")[1][:1000]
-
-                dados = extrair_precos(trecho)
-
-                if dados:
-                    precos_finais["normal"] = dados
-
-            except:
-                pass
-
-        # =================================
         # FOIL
-        # =================================
         if "Foil" in texto_pagina:
+            trecho = texto_pagina.split("Foil")[1][:1000]
+            dados = extrair_precos(trecho)
+            if dados:
+                precos_finais["foil"] = dados
 
-            try:
-
-                trecho = texto_pagina.split("Foil")[1][:1000]
-
-                dados = extrair_precos(trecho)
-
-                if dados:
-                    precos_finais["foil"] = dados
-
-            except:
-                pass
-
-        # =================================
         # REVERSE FOIL
-        # =================================
         if "Reverse Foil" in texto_pagina:
+            trecho = texto_pagina.split("Reverse Foil")[1][:1000]
+            dados = extrair_precos(trecho)
+            if dados:
+                precos_finais["reverse_foil"] = dados
 
-            try:
-
-                trecho = texto_pagina.split("Reverse Foil")[1][:1000]
-
-                dados = extrair_precos(trecho)
-
-                if dados:
-                    precos_finais["reverse_foil"] = dados
-
-            except:
-                pass
-
-        # =================================
-        # RESULTADO
-        # =================================
-        if len(precos_finais) > 0:
-            print(f"ENCONTRADO: {nome_carta}")
-        else:
+        if not precos_finais:
             print("NENHUM PREÇO ENCONTRADO")
 
-        # salva cache
         cache_precos[cache_key] = precos_finais
 
         return jsonify(precos_finais)
 
     except Exception as e:
+        print("ERRO:", str(e))
+        return jsonify({"erro": str(e)}), 500
 
-        print("ERRO GERAL:", e)
-
-        return jsonify({
-            "erro": str(e)
-        }), 500
-
-    finally:
-
-        try:
-            navegador.quit()
-        except:
-            pass
 
 # =========================================
 # START
 # =========================================
 if __name__ == '__main__':
-
     app.run(
         host='0.0.0.0',
         port=5000,
