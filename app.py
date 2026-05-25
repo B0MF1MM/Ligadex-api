@@ -13,10 +13,6 @@ CORS(app)
 cache_precos = {}
 
 
-# =========================
-# DRIVER COM UNDETECTED-CHROMEDRIVER
-# Patcha o binário do Chrome para passar pelo Cloudflare
-# =========================
 def criar_driver():
     opcoes = uc.ChromeOptions()
     opcoes.add_argument("--headless=new")
@@ -29,13 +25,11 @@ def criar_driver():
     if chrome_bin:
         opcoes.binary_location = chrome_bin
 
-    driver = uc.Chrome(options=opcoes, use_subprocess=False)
+    # ✅ version_main=148 garante que o driver baixado bata com o Chrome instalado
+    driver = uc.Chrome(options=opcoes, use_subprocess=False, version_main=148)
     return driver
 
 
-# =========================
-# EXTRATOR DE PREÇOS
-# =========================
 def extrair_precos(texto):
     precos = re.findall(r"R\$\s*[\d\.]+,\d{2}", texto)
     if len(precos) >= 3:
@@ -47,24 +41,19 @@ def extrair_precos(texto):
     return None
 
 
-# =========================
-# SCRAPING
-# =========================
 def buscar_dados(url):
     driver = None
     try:
         print(f"URL: {url}", flush=True)
         driver = criar_driver()
         driver.get(url)
-
-        # Aguarda mais tempo para o Cloudflare liberar
         time.sleep(6)
 
         html = driver.page_source
         soup = BeautifulSoup(html, "html.parser")
         texto = soup.get_text(" ")
 
-        print(f"TAMANHO PAGINA: {len(texto)}", flush=True)
+        print(f"TAMANHO: {len(texto)}", flush=True)
         print(f"TRECHO: {texto[:500]}", flush=True)
 
         resultados = {}
@@ -96,9 +85,6 @@ def buscar_dados(url):
             driver.quit()
 
 
-# =========================
-# API
-# =========================
 @app.route("/api/preco", methods=["GET"])
 def preco():
     try:
