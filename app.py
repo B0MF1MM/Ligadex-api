@@ -1,38 +1,61 @@
 import urllib.parse
 import re
-import cloudscraper
+import time
+import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 
 app = Flask(__name__)
 CORS(app)
 
 cache_precos = {}
 
-# =========================
-# CLOUDSCRAPER — bypassa proteção anti-bot/Cloudflare
-# Substitui o requests.get comum que era bloqueado com 403
-# =========================
-scraper = cloudscraper.create_scraper(
-    browser={
-        "browser": "chrome",
-        "platform": "windows",
-        "mobile": False,
-    }
-)
 
-# Headers extras para parecer ainda mais com um navegador real
-HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Cache-Control": "max-age=0",
-    # Simula que o usuário veio de uma busca no Google
-    "Referer": "https://www.google.com/",
-}
+# =========================
+# CRIA DRIVER CHROME HEADLESS
+# Usa Chrome do sistema (Render) ou ChromeDriver local
+# =========================
+def criar_driver():
+    opcoes = Options()
+    opcoes.add_argument("--headless=new")
+    opcoes.add_argument("--no-sandbox")
+    opcoes.add_argument("--disable-dev-shm-usage")
+    opcoes.add_argument("--disable-gpu")
+    opcoes.add_argument("--window-size=1920,1080")
+    opcoes.add_argument("--disable-blink-features=AutomationControlled")
+    opcoes.add_argument(
+        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+    opcoes.add_experimental_option("excludeSwitches", ["enable-automation"])
+    opcoes.add_experimental_option("useAutomationExtension", False)
+
+    # Se estiver no Render/Linux, usa o chromium do sistema
+    chrome_bin = os.environ.get("CHROME_BIN")
+    chromedriver_path = os.environ.get("CHROMEDRIVER_PATH")
+
+    if chrome_bin:
+        opcoes.binary_location = chrome_bin
+
+    if chromedriver_path:
+        service = Service(executable_path=chromedriver_path)
+    else:
+        # Ambiente local — usa webdriver_manager
+        from webdriver_manager.chrome import ChromeDriverManager
+        service = Service(ChromeDriverManager().install())
+
+    driver = webdriver.Chrome(service=service, options=opcoes)
+
+    driver.execute_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    )
+
+    return driver
 
 
 # =========================
@@ -50,24 +73,22 @@ def extrair_precos(texto):
 
 
 # =========================
-# SCRAPING COM CLOUDSCRAPER
+# SCRAPING COM SELENIUM
 # =========================
 def buscar_dados(url):
+    driver = None
     try:
-        r = scraper.get(url, headers=HEADERS, timeout=20)
-
         print(f"URL: {url}")
-        print(f"STATUS: {r.status_code}")
+        driver = criar_driver()
+        driver.get(url)
 
-        if r.status_code != 200:
-            print(f"STATUS ERROR: {r.status_code}")
-            return {}
+        time.sleep(3)  # Aguarda JS carregar a página
 
-        soup = BeautifulSoup(r.text, "html.parser")
+        html = driver.page_source
+        soup = BeautifulSoup(html, "html.parser")
         texto = soup.get_text(" ")
 
         resultados = {}
-
         blocos = {
             "normal": "Normal",
             "foil": "Foil",
@@ -84,11 +105,16 @@ def buscar_dados(url):
                 except Exception:
                     pass
 
+        print(f"RESULTADO: {resultados}")
         return resultados
 
     except Exception as e:
-        print(f"ERRO SCRAPING: {e}")
+        print(f"ERRO SELENIUM: {e}")
         return {}
+
+    finally:
+        if driver:
+            driver.quit()
 
 
 # =========================
@@ -119,10 +145,6 @@ def preco():
         )
 
         dados = buscar_dados(url)
-
-        if not dados:
-            dados = {}  # Retorna vazio — front já trata isso como "sem preços"
-
         cache_precos[cache_key] = dados
         return jsonify(dados)
 
@@ -132,7 +154,7 @@ def preco():
 
 
 # =========================
-# HEALTHCHECK (útil no Render)
+# HEALTHCHECK
 # =========================
 @app.route("/", methods=["GET"])
 def health():

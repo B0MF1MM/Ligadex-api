@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: ligadex-api
+    runtime: python
+    buildCommand: |
+      apt-get update && apt-get install -y \
+        chromium-driver \
+        chromium \
+        --no-install-recommends
+      pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 60
+    envVars:
+      - key: CHROME_BIN
+        value: /usr/bin/chromium
+      - key: CHROMEDRIVER_PATH
+        value: /usr/bin/chromedriver
