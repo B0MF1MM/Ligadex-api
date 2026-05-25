@@ -1,6 +1,6 @@
 import urllib.parse
 import re
-import requests
+import cloudscraper
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from bs4 import BeautifulSoup
@@ -11,85 +11,95 @@ CORS(app)
 cache_precos = {}
 
 # =========================
-# EXTRATOR ROBUSTO
+# CLOUDSCRAPER — bypassa proteção anti-bot/Cloudflare
+# Substitui o requests.get comum que era bloqueado com 403
+# =========================
+scraper = cloudscraper.create_scraper(
+    browser={
+        "browser": "chrome",
+        "platform": "windows",
+        "mobile": False,
+    }
+)
+
+# Headers extras para parecer ainda mais com um navegador real
+HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Cache-Control": "max-age=0",
+    # Simula que o usuário veio de uma busca no Google
+    "Referer": "https://www.google.com/",
+}
+
+
+# =========================
+# EXTRATOR DE PREÇOS
 # =========================
 def extrair_precos(texto):
     precos = re.findall(r"R\$\s*[\d\.]+,\d{2}", texto)
-
     if len(precos) >= 3:
         return {
             "menor": precos[0],
             "medio": precos[1],
-            "maior": precos[2]
+            "maior": precos[2],
         }
-
     return None
 
 
 # =========================
-# FUNÇÃO SEGURA DE SCRAPING
+# SCRAPING COM CLOUDSCRAPER
 # =========================
 def buscar_dados(url):
-
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
-        )
-    }
-
     try:
-        r = requests.get(url, headers=headers, timeout=15)
+        r = scraper.get(url, headers=HEADERS, timeout=20)
+
+        print(f"URL: {url}")
+        print(f"STATUS: {r.status_code}")
 
         if r.status_code != 200:
-            print("STATUS ERROR:", r.status_code)
+            print(f"STATUS ERROR: {r.status_code}")
             return {}
 
         soup = BeautifulSoup(r.text, "html.parser")
-
-        texto = soup.get_text(separator=" ")
-
-        # DEBUG REAL (IMPORTANTE)
-        print("TEXTO PARCIAL:", texto[:1000])
+        texto = soup.get_text(" ")
 
         resultados = {}
 
         blocos = {
             "normal": "Normal",
             "foil": "Foil",
-            "reverse_foil": "Reverse Foil"
+            "reverse_foil": "Reverse Foil",
         }
 
         for key, label in blocos.items():
-
             if label in texto:
                 try:
                     trecho = texto.split(label)[1][:1500]
                     dados = extrair_precos(trecho)
-
                     if dados:
                         resultados[key] = dados
-
-                except Exception as e:
-                    print(f"Erro bloco {key}:", e)
+                except Exception:
+                    pass
 
         return resultados
 
     except Exception as e:
-        print("ERRO REQUEST:", e)
+        print(f"ERRO SCRAPING: {e}")
         return {}
 
 
 # =========================
 # API
 # =========================
-@app.route('/api/preco', methods=['GET'])
+@app.route("/api/preco", methods=["GET"])
 def preco():
-
     try:
-        nome = request.args.get('carta')
-        ed = request.args.get('ed')
-        num = request.args.get('num')
+        nome = request.args.get("carta")
+        ed = request.args.get("ed")
+        num = request.args.get("num")
 
         if not nome:
             return jsonify({"erro": "carta ausente"}), 400
@@ -97,46 +107,37 @@ def preco():
         cache_key = f"{nome}-{ed}-{num}"
 
         if cache_key in cache_precos:
+            print(f"CACHE HIT: {cache_key}")
             return jsonify(cache_precos[cache_key])
 
-        print("BUSCA NOVA:", nome)
+        print(f"BUSCA NOVA: {nome}")
 
         nome_enc = urllib.parse.quote(nome)
-
         url = (
             "https://www.ligapokemon.com.br/"
             f"?view=cards/card&card={nome_enc}&ed={ed}&num={num}"
         )
 
-        print("URL:", url)
-
         dados = buscar_dados(url)
 
-        # 🔥 GARANTE QUE NUNCA QUEBRA API
         if not dados:
-            dados = {
-                "erro": False,
-                "mensagem": "sem dados encontrados",
-                "normal": None,
-                "foil": None,
-                "reverse_foil": None
-            }
+            dados = {}  # Retorna vazio — front já trata isso como "sem preços"
 
         cache_precos[cache_key] = dados
-
         return jsonify(dados)
 
     except Exception as e:
-        print("ERRO GERAL:", str(e))
-
-        return jsonify({
-            "erro": True,
-            "mensagem": str(e)
-        }), 500
+        print(f"ERRO GERAL: {e}")
+        return jsonify({"erro": True, "mensagem": str(e)}), 500
 
 
 # =========================
-# START
+# HEALTHCHECK (útil no Render)
 # =========================
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+@app.route("/", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "cache": len(cache_precos)}), 200
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
