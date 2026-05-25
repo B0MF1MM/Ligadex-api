@@ -66,6 +66,9 @@ def extrair_precos(texto):
 # API
 # =========================================
 @app.route('/api/preco', methods=['GET'])
+def preco():
+    return buscar_preco()
+
 def buscar_preco():
 
     nome_carta = request.args.get('carta')
