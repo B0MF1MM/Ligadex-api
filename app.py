@@ -1,33 +1,14 @@
 import urllib.parse
 import re
-import time
-import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from bs4 import BeautifulSoup
-import undetected_chromedriver as uc
+import cloudscraper  # Substituiu o undetected_chromedriver
 
 app = Flask(__name__)
 CORS(app)
 
 cache_precos = {}
-
-
-def criar_driver():
-    opcoes = uc.ChromeOptions()
-    opcoes.add_argument("--headless=new")
-    opcoes.add_argument("--no-sandbox")
-    opcoes.add_argument("--disable-dev-shm-usage")
-    opcoes.add_argument("--disable-gpu")
-    opcoes.add_argument("--window-size=1920,1080")
-
-    chrome_bin = os.environ.get("CHROME_BIN")
-    if chrome_bin:
-        opcoes.binary_location = chrome_bin
-
-    # ✅ version_main=148 garante que o driver baixado bata com o Chrome instalado
-    driver = uc.Chrome(options=opcoes, use_subprocess=False, version_main=148)
-    return driver
 
 
 def extrair_precos(texto):
@@ -42,14 +23,25 @@ def extrair_precos(texto):
 
 
 def buscar_dados(url):
-    driver = None
     try:
         print(f"URL: {url}", flush=True)
-        driver = criar_driver()
-        driver.get(url)
-        time.sleep(6)
+        
+        # ✅ Criando o scraper para passar pelo Cloudflare
+        scraper = cloudscraper.create_scraper(browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'desktop': True
+        })
+        
+        # Faz a requisição GET
+        response = scraper.get(url)
+        
+        # Verifica se fomos bloqueados mesmo com o cloudscraper
+        if response.status_code != 200:
+            print(f"ERRO HTTP: {response.status_code}", flush=True)
+            return {}
 
-        html = driver.page_source
+        html = response.text
         soup = BeautifulSoup(html, "html.parser")
         texto = soup.get_text(" ")
 
@@ -79,10 +71,6 @@ def buscar_dados(url):
     except Exception as e:
         print(f"ERRO: {e}", flush=True)
         return {}
-
-    finally:
-        if driver:
-            driver.quit()
 
 
 @app.route("/api/preco", methods=["GET"])
@@ -119,26 +107,24 @@ def preco():
 
 @app.route("/api/debug", methods=["GET"])
 def debug():
-    driver = None
     try:
         url = request.args.get(
             "url",
             "https://www.ligapokemon.com.br/?view=cards/card&card=Kakuna%20%28002%2F086%29&ed=CRI&num=002"
         )
-        driver = criar_driver()
-        driver.get(url)
-        time.sleep(6)
-        texto = BeautifulSoup(driver.page_source, "html.parser").get_text(" ")
+        
+        scraper = cloudscraper.create_scraper()
+        response = scraper.get(url)
+        
+        texto = BeautifulSoup(response.text, "html.parser").get_text(" ")
         return jsonify({
             "url": url,
+            "status_code": response.status_code,
             "tamanho": len(texto),
             "trecho": texto[:3000],
         })
     except Exception as e:
         return jsonify({"erro": str(e)})
-    finally:
-        if driver:
-            driver.quit()
 
 
 @app.route("/", methods=["GET"])
