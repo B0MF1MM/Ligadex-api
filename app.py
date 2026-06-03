@@ -26,17 +26,21 @@ def buscar_dados(url):
     try:
         print(f"URL ALVO: {url}", flush=True)
         
-        # Coloque a sua chave do ScraperAPI aqui
+        # Sua chave do ScraperAPI
         SCRAPER_API_KEY = "72a4e794eb83856fcfbfd305bc33c250" 
         
-        # Monta a URL do proxy passando o site da liga como parâmetro
-        proxy_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={url}"
+        # O SEGREDO ESTÁ AQUI: Usamos o "payload" para o Python arrumar os "&" do link
+        payload = {
+            'api_key': SCRAPER_API_KEY,
+            'url': url
+        }
         
-        # Faz a requisição padrão (o Proxy lida com a Cloudflare)
-        response = requests.get(proxy_url)
+        # Faz a requisição padrão usando o params
+        response = requests.get('https://api.scraperapi.com/', params=payload)
         
         if response.status_code != 200:
             print(f"ERRO HTTP: {response.status_code}", flush=True)
+            print(f"MOTIVO DO ERRO: {response.text}", flush=True) # Ajuda a debugar se der erro
             return {}
 
         html = response.text
@@ -108,8 +112,10 @@ def debug():
             "https://www.ligapokemon.com.br/?view=cards/card&card=Kakuna%20%28002%2F086%29&ed=CRI&num=002"
         )
         
-        scraper = cloudscraper.create_scraper()
-        response = scraper.get(url)
+        # Rota de debug consertada para usar o ScraperAPI também
+        SCRAPER_API_KEY = "72a4e794eb83856fcfbfd305bc33c250" 
+        payload = {'api_key': SCRAPER_API_KEY, 'url': url}
+        response = requests.get('https://api.scraperapi.com/', params=payload)
         
         texto = BeautifulSoup(response.text, "html.parser").get_text(" ")
         return jsonify({
