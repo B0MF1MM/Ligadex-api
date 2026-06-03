@@ -32,7 +32,8 @@ def buscar_dados(url):
         # O SEGREDO ESTÁ AQUI: Usamos o "payload" para o Python arrumar os "&" do link
         payload = {
             'api_key': SCRAPER_API_KEY,
-            'url': url
+            'url': url,
+            'render': 'true'
         }
         
         # Faz a requisição padrão usando o params
@@ -46,6 +47,8 @@ def buscar_dados(url):
         html = response.text
         soup = BeautifulSoup(html, "html.parser")
         texto = soup.get_text(" ")
+
+        print(f"TRECHO DO HTML CAPTURADO: {texto[:400]}", flush=True)
 
         resultados = {}
         blocos = {
