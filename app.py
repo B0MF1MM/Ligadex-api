@@ -3,7 +3,7 @@ import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from bs4 import BeautifulSoup
-import cloudscraper  # Substituiu o undetected_chromedriver
+import requests
 
 app = Flask(__name__)
 CORS(app)
@@ -24,19 +24,17 @@ def extrair_precos(texto):
 
 def buscar_dados(url):
     try:
-        print(f"URL: {url}", flush=True)
+        print(f"URL ALVO: {url}", flush=True)
         
-        # ✅ Criando o scraper para passar pelo Cloudflare
-        scraper = cloudscraper.create_scraper(browser={
-            'browser': 'chrome',
-            'platform': 'windows',
-            'desktop': True
-        })
+        # Coloque a sua chave do ScraperAPI aqui
+        SCRAPER_API_KEY = "72a4e794eb83856fcfbfd305bc33c250" 
         
-        # Faz a requisição GET
-        response = scraper.get(url)
+        # Monta a URL do proxy passando o site da liga como parâmetro
+        proxy_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={url}"
         
-        # Verifica se fomos bloqueados mesmo com o cloudscraper
+        # Faz a requisição padrão (o Proxy lida com a Cloudflare)
+        response = requests.get(proxy_url)
+        
         if response.status_code != 200:
             print(f"ERRO HTTP: {response.status_code}", flush=True)
             return {}
@@ -44,9 +42,6 @@ def buscar_dados(url):
         html = response.text
         soup = BeautifulSoup(html, "html.parser")
         texto = soup.get_text(" ")
-
-        print(f"TAMANHO: {len(texto)}", flush=True)
-        print(f"TRECHO: {texto[:500]}", flush=True)
 
         resultados = {}
         blocos = {
